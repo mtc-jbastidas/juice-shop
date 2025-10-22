@@ -1,7 +1,13 @@
-FROM node:20-buster AS installer
+# ===========================
+#  STAGE 1 - Installer
+# ===========================
+FROM node:20-bookworm AS installer
 COPY . /juice-shop
 WORKDIR /juice-shop
-RUN npm i -g typescript ts-node
+
+# Evita errores de permisos en npm global
+RUN npm install -g --unsafe-perm typescript ts-node
+
 RUN npm install --omit=dev --unsafe-perm
 RUN npm dedupe --omit=dev
 RUN rm -rf frontend/node_modules
@@ -19,16 +25,25 @@ ARG CYCLONEDX_NPM_VERSION=latest
 RUN npm install -g @cyclonedx/cyclonedx-npm@$CYCLONEDX_NPM_VERSION
 RUN npm run sbom
 
-# workaround for libxmljs startup error
-FROM node:20-buster AS libxmljs-builder
+# ===========================
+#  STAGE 2 - libxmljs builder
+# ===========================
+FROM node:20-bookworm AS libxmljs-builder
 WORKDIR /juice-shop
+
+# Instala dependencias de compilación (en Debian 12 funciona)
 RUN apt-get update && apt-get install -y build-essential python3
+
 COPY --from=installer /juice-shop/node_modules ./node_modules
 RUN rm -rf node_modules/libxmljs/build && \
   cd node_modules/libxmljs && \
   npm run build
 
+# ===========================
+#  STAGE 3 - Final image
+# ===========================
 FROM gcr.io/distroless/nodejs20-debian12
+
 ARG BUILD_DATE
 ARG VCS_REF
 LABEL maintainer="Bjoern Kimminich <bjoern.kimminich@owasp.org>" \
@@ -43,9 +58,13 @@ LABEL maintainer="Bjoern Kimminich <bjoern.kimminich@owasp.org>" \
     org.opencontainers.image.source="https://github.com/juice-shop/juice-shop" \
     org.opencontainers.image.revision=$VCS_REF \
     org.opencontainers.image.created=$BUILD_DATE
+
 WORKDIR /juice-shop
+
 COPY --from=installer --chown=65532:0 /juice-shop .
 COPY --chown=65532:0 --from=libxmljs-builder /juice-shop/node_modules/libxmljs ./node_modules/libxmljs
+
 USER 65532
 EXPOSE 3000
+
 CMD ["/juice-shop/build/app.js"]
